@@ -91,3 +91,9 @@ Press `q` in the GUI window to exit cleanly.
   - `MOTION_BLUR_SIZE`
   - `MOTION_DILATE_ITERATIONS`
   - `MOTION_ALPHA`
+- Stream stability can be tuned from `.env` using:
+  - `STREAM_READ_TIMEOUT` (seconds without data before reconnect, default `5`)
+  - `STREAM_RECONNECT_DELAY` (delay between reconnect attempts, default `0.5`)
+  - `SRT_LATENCY_MS` (default SRT latency in ms if URL has no latency, default `200`)
+  - `SRT_RCV_LATENCY_MS` (receiver latency override, default follows `SRT_LATENCY_MS`)
+  - `SRT_PEER_LATENCY_MS` (peer latency override, default follows `SRT_LATENCY_MS`)

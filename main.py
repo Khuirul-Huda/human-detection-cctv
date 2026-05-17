@@ -9,6 +9,7 @@ import logging
 import subprocess
 import shlex
 import sys
+import select
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -43,6 +44,11 @@ FF_THREADS = int(os.getenv('FF_THREADS', '1'))            # limit ffmpeg threads
 JPEG_QUALITY = int(os.getenv('JPEG_QUALITY', '8'))       # 2-31 lower -> higher quality; higher number = lower CPU
 AI_INTERVAL = float(os.getenv('AI_INTERVAL', '5'))       # minimum seconds between AI inferences
 USE_HWACCEL = str(os.getenv('USE_HWACCEL', 'false')).lower() in ('1', 'true', 'yes')
+STREAM_READ_TIMEOUT = float(os.getenv('STREAM_READ_TIMEOUT', '5'))
+STREAM_RECONNECT_DELAY = float(os.getenv('STREAM_RECONNECT_DELAY', '0.5'))
+SRT_LATENCY_MS = int(os.getenv('SRT_LATENCY_MS', '200'))
+SRT_RCV_LATENCY_MS = int(os.getenv('SRT_RCV_LATENCY_MS', str(SRT_LATENCY_MS)))
+SRT_PEER_LATENCY_MS = int(os.getenv('SRT_PEER_LATENCY_MS', str(SRT_LATENCY_MS)))
 
 # Telegram config
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN', '')
@@ -82,93 +88,116 @@ class SRTFFmpegReader:
         self.frame = None
         self.status = False
         self._stop = False
+        self.read_timeout = max(1.0, float(STREAM_READ_TIMEOUT))
+        self.reconnect_delay = max(0.1, float(STREAM_RECONNECT_DELAY))
         self.thread = threading.Thread(target=self._reader_thread, args=())
         self.thread.daemon = True
         self.thread.start()
 
     def _start_process(self):
-        # Use MJPEG image2pipe to avoid fixed-size raw frame issues and make parsing robust
-        # Increase probe values so codecs (HEVC) and stream size can be detected reliably
-        # Limit ffmpeg threads and scale/fps to reduce CPU on low-end devices.
+        # Use MJPEG image2pipe with tolerant input flags to reduce disconnects on unstable links.
         hwaccel_flags = ""
         if self.use_hwaccel:
             # Intel VAAPI hardware acceleration for H.264/HEVC decoding
             hwaccel_flags = "-hwaccel vaapi -hwaccel_device /dev/dri/renderD128 "
+        input_url = self._build_stream_url()
         
         cmd = (
-            f'ffmpeg -hide_banner -loglevel warning -fflags nobuffer -flags low_delay '
-            f'-probesize 5000000 -analyzeduration 1000000 {hwaccel_flags}-threads {self.ff_threads} -i "{self.stream_url}" '
+            f'ffmpeg -hide_banner -loglevel error -probesize 10000000 -analyzeduration 2000000 '
+            f'-fflags +genpts+discardcorrupt -err_detect ignore_err -rw_timeout 5000000 '
+            f'{hwaccel_flags}-thread_queue_size 1024 -threads {self.ff_threads} -i "{input_url}" '
             f'-vf scale={self.width}:{self.height},fps={self.fps} -f image2pipe -vcodec mjpeg -q:v {self.jpeg_quality} pipe:1'
         )
         args = shlex.split(cmd)
         try:
-            self.proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self.proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
         except Exception as e:
             logging.warning(f"Gagal menjalankan ffmpeg: {e}")
             self.proc = None
 
+    def _reset_process(self):
+        self.status = False
+        self.frame = None
+        if self.proc:
+            try:
+                self.proc.kill()
+            except Exception:
+                pass
+        self.proc = None
+
+    def _build_stream_url(self):
+        if not self.stream_url.lower().startswith('srt://'):
+            return self.stream_url
+        lowered = self.stream_url.lower()
+        if 'latency=' in lowered:
+            return self.stream_url
+        separator = '&' if '?' in self.stream_url else '?'
+        return (
+            f"{self.stream_url}{separator}latency={SRT_LATENCY_MS}"
+            f"&rcvlatency={SRT_RCV_LATENCY_MS}&peerlatency={SRT_PEER_LATENCY_MS}"
+        )
+
     def _reader_thread(self):
+        buf = b''
+        last_data_time = 0
         while not self._stop:
             if self.proc is None:
                 self._start_process()
                 if self.proc is None:
-                    time.sleep(1)
+                    time.sleep(self.reconnect_delay)
                     continue
+                buf = b''
+                last_data_time = time.time()
 
             try:
-                # Read jpeg frames from stdout by finding JPEG SOI/EOI markers
-                buf = b''
-                while not self._stop:
-                    chunk = self.proc.stdout.read(4096)
-                    if not chunk:
-                        # process ended or no data
-                        break
-                    buf += chunk
-                    # look for JPEG frame boundaries
-                    start = buf.find(b'\xff\xd8')
-                    end = buf.find(b'\xff\xd9', start + 2)
-                    if start != -1 and end != -1:
-                        jpg = buf[start:end+2]
-                        buf = buf[end+2:]
-                        arr = np.frombuffer(jpg, dtype=np.uint8)
-                        frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-                        if frame is None:
-                            continue
-                        # ensure size matches requested (cv2.resize if needed)
-                        if frame.shape[1] != self.width or frame.shape[0] != self.height:
-                            frame = cv2.resize(frame, (self.width, self.height))
-                        self.frame = frame
-                        self.status = True
-                        # yield one frame then continue reading
-                        break
-                # if we exited inner loop due to no chunk, restart ffmpeg
-                if not buf and (self.proc is None or self.proc.poll() is not None):
-                    self.status = False
-                    self.frame = None
-                    if self.proc:
-                        try:
-                            stderr = self.proc.stderr.read().decode('utf-8', errors='ignore')
-                            logging.debug(f'ffmpeg stderr: {stderr}')
-                        except Exception:
-                            pass
-                    if self.proc:
-                        try:
-                            self.proc.kill()
-                        except Exception:
-                            pass
-                    self.proc = None
-                    time.sleep(0.1)
+                ready, _, _ = select.select([self.proc.stdout], [], [], 1.0)
+                if not ready:
+                    if self.proc.poll() is not None or (time.time() - last_data_time) > self.read_timeout:
+                        self._reset_process()
+                        time.sleep(self.reconnect_delay)
                     continue
+
+                chunk = self.proc.stdout.read(8192)
+                if not chunk:
+                    self._reset_process()
+                    time.sleep(self.reconnect_delay)
+                    continue
+
+                last_data_time = time.time()
+                buf += chunk
+
+                # Parse complete JPEG frames while preserving residual bytes for next read.
+                while True:
+                    start = buf.find(b'\xff\xd8')
+                    if start == -1:
+                        # Keep only tail in case marker is split across chunks.
+                        if len(buf) > 2:
+                            buf = buf[-2:]
+                        break
+                    if start > 0:
+                        buf = buf[start:]
+
+                    end = buf.find(b'\xff\xd9', 2)
+                    if end == -1:
+                        # Guard against unbounded growth on corrupted stream.
+                        if len(buf) > 2 * 1024 * 1024:
+                            buf = buf[-1024 * 1024:]
+                        break
+
+                    jpg = buf[:end + 2]
+                    buf = buf[end + 2:]
+
+                    arr = np.frombuffer(jpg, dtype=np.uint8)
+                    frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                    if frame is None:
+                        continue
+                    if frame.shape[1] != self.width or frame.shape[0] != self.height:
+                        frame = cv2.resize(frame, (self.width, self.height))
+                    self.frame = frame
+                    self.status = True
             except Exception:
-                self.status = False
-                self.frame = None
-                if self.proc:
-                    try:
-                        self.proc.kill()
-                    except Exception:
-                        pass
-                self.proc = None
-                time.sleep(0.2)
+                self._reset_process()
+                time.sleep(self.reconnect_delay)
 
     def read(self):
         return self.status, self.frame
