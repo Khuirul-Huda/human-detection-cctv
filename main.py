@@ -8,6 +8,7 @@ import threading
 import logging
 import subprocess
 import shlex
+import sys
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -181,6 +182,35 @@ class SRTFFmpegReader:
                 pass
 
 # === INISIALISASI AI ===
+def ensure_model_available(model_path=MODEL_PATH):
+    """Ensure the ONNX model exists locally. If missing, attempt to run the helper script to fetch/export it.
+
+    This will call `scripts/get_yolo_models.py` with the current Python interpreter.
+    """
+    if os.path.exists(model_path):
+        return True
+
+    logging.info(f"Model tidak ditemukan di {model_path}. Mencoba mengunduh/mengekspor menggunakan helper script...")
+    script = os.path.join(os.path.dirname(__file__), 'scripts', 'get_yolo_models.py')
+    if not os.path.exists(script):
+        logging.error(f"Helper script tidak ditemukan: {script}. Silakan buat atau jalankan ekspor secara manual.")
+        return False
+
+    try:
+        rc = subprocess.call([sys.executable, script])
+        if rc != 0:
+            logging.error(f"Helper script mengembalikan kode keluar {rc}.")
+            return False
+    except Exception as e:
+        logging.exception(f"Gagal menjalankan helper script: {e}")
+        return False
+
+    if os.path.exists(model_path):
+        logging.info(f"Model tersedia di {model_path} setelah proses helper.")
+        return True
+    logging.error(f"Model masih tidak ditemukan setelah menjalankan helper: {model_path}")
+    return False
+
 print("Memuat Model YOLOv8 ONNX...")
 # ONNX runtime session options tuned for low-end device (limit threads)
 sess_opts = ort.SessionOptions()
@@ -190,6 +220,12 @@ try:
     sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_EXTENDED
 except Exception:
     pass
+
+# Ensure model exists; if not, attempt to download/export it.
+if not ensure_model_available(MODEL_PATH):
+    logging.error("Model ONNX tidak tersedia. Hentikan program.")
+    raise SystemExit(1)
+
 session = ort.InferenceSession(MODEL_PATH, sess_options=sess_opts, providers=['CPUExecutionProvider'])
 outname = [i.name for i in session.get_outputs()]
 inname = [i.name for i in session.get_inputs()]

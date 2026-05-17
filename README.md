@@ -58,6 +58,18 @@ python -c "from ultralytics import YOLO; YOLO('models/yolov8n.pt').export(format
 
 After export, move the generated `.onnx` file into `models/yolov8n.onnx` if the exporter wrote it elsewhere.
 
+### Automatic helper script
+
+There is a helper script that attempts to fetch the official `yolov8n` weights via `ultralytics` and export ONNX into `models/`:
+
+```bash
+source cctv_env/bin/activate
+pip install ultralytics
+python3 scripts/get_yolo_models.py
+```
+
+The script will place `models/yolov8n.onnx` into the `models/` folder. If you already have a local `models/yolov8n.pt`, the script will use it.
+
 ## Run
 
 ```bash
