@@ -17,7 +17,6 @@ venv/
 env/
 cctv_env/
 .env
-.env.*
 *.log
 
 # IDE / editor files
