@@ -565,9 +565,6 @@ while running:
             gui_enabled = False
             cv2.destroyAllWindows()
     else:
-        if (time.time() - cli_last_log) > 5:
-            logging.info("Mode CLI aktif. Stream berjalan...")
-            cli_last_log = time.time()
         if cli_quit_requested():
             running = False
             break
