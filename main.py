@@ -93,6 +93,10 @@ class SRTFFmpegReader:
         self.status = False
         self._stop = False
         self._stderr_thread = None
+        self._disable_hwaccel = False
+        if self.use_hwaccel and not os.path.exists("/dev/dri/renderD128"):
+            logging.warning("Perangkat VAAPI tidak ditemukan. Beralih ke software decoding.")
+            self._disable_hwaccel = True
         self.read_timeout = max(1.0, float(STREAM_READ_TIMEOUT))
         self.reconnect_delay = max(0.1, float(STREAM_RECONNECT_DELAY))
         self.thread = threading.Thread(target=self._reader_thread, args=())
@@ -102,7 +106,7 @@ class SRTFFmpegReader:
     def _start_process(self):
         # Use MJPEG image2pipe with tolerant input flags to reduce disconnects on unstable links.
         hwaccel_flags = ""
-        if self.use_hwaccel:
+        if self.use_hwaccel and not self._disable_hwaccel:
             # Intel VAAPI hardware acceleration for H.264/HEVC decoding
             hwaccel_flags = "-hwaccel vaapi -hwaccel_device /dev/dri/renderD128 "
         input_url = self._build_stream_url()
@@ -142,6 +146,18 @@ class SRTFFmpegReader:
                 line = raw.decode(errors="ignore").strip()
                 if line:
                     logging.warning(f"ffmpeg: {line}")
+                    if (
+                        self.use_hwaccel
+                        and not self._disable_hwaccel
+                        and (
+                            "No VA display found" in line
+                            or "Hardware device setup failed" in line
+                            or "device type vaapi needed" in line
+                        )
+                    ):
+                        logging.warning("VAAPI gagal. Beralih ke software decoding.")
+                        self._disable_hwaccel = True
+                        self._reset_process()
         except Exception:
             pass
 
@@ -169,6 +185,7 @@ class SRTFFmpegReader:
 
     def _reader_thread(self):
         buf = b''
+        raw_buf = b''
         last_data_time = 0
         while not self._stop:
             if self.proc is None:
@@ -177,6 +194,7 @@ class SRTFFmpegReader:
                     time.sleep(self.reconnect_delay)
                     continue
                 buf = b''
+                raw_buf = b''
                 last_data_time = time.time()
 
             try:
@@ -188,17 +206,21 @@ class SRTFFmpegReader:
                     continue
 
                 if self.pipe_format == "raw":
-                    chunk = self.proc.stdout.read(self.frame_size)
-                    if not chunk or len(chunk) < self.frame_size:
+                    chunk = self.proc.stdout.read(8192)
+                    if not chunk:
                         self._reset_process()
                         time.sleep(self.reconnect_delay)
                         continue
 
                     last_data_time = time.time()
-                    frame = np.frombuffer(chunk, dtype=np.uint8)
-                    frame = frame.reshape((self.height, self.width, 3))
-                    self.frame = frame
-                    self.status = True
+                    raw_buf += chunk
+                    while len(raw_buf) >= self.frame_size:
+                        frame_bytes = raw_buf[:self.frame_size]
+                        raw_buf = raw_buf[self.frame_size:]
+                        frame = np.frombuffer(frame_bytes, dtype=np.uint8)
+                        frame = frame.reshape((self.height, self.width, 3))
+                        self.frame = frame
+                        self.status = True
                     continue
 
                 chunk = self.proc.stdout.read(8192)
