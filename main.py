@@ -49,6 +49,7 @@ STREAM_RECONNECT_DELAY = float(os.getenv('STREAM_RECONNECT_DELAY', '0.5'))
 SRT_LATENCY_MS = int(os.getenv('SRT_LATENCY_MS', '200'))
 SRT_RCV_LATENCY_MS = int(os.getenv('SRT_RCV_LATENCY_MS', str(SRT_LATENCY_MS)))
 SRT_PEER_LATENCY_MS = int(os.getenv('SRT_PEER_LATENCY_MS', str(SRT_LATENCY_MS)))
+CLI_MODE = str(os.getenv('CLI_MODE', 'false')).lower() in ('1', 'true', 'yes')
 
 # Telegram config
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN', '')
@@ -361,6 +362,41 @@ last_reconnect_log = 0
 
 running = True
 prev_status = False
+gui_enabled = False
+cli_last_log = 0.0
+
+def init_gui_window():
+    if CLI_MODE:
+        logging.info("CLI mode dipaksa oleh environment.")
+        return False
+    if os.name == "posix" and not os.environ.get("DISPLAY"):
+        logging.warning("DISPLAY tidak ditemukan. Menjalankan mode CLI.")
+        return False
+    try:
+        cv2.namedWindow("CCTV Stream - Human Detection", cv2.WINDOW_NORMAL)
+        return True
+    except Exception as exc:
+        logging.warning(f"GUI OpenCV gagal diinisialisasi: {exc}. Beralih ke mode CLI.")
+        return False
+
+def cli_quit_requested():
+    try:
+        if not sys.stdin or not hasattr(sys.stdin, "fileno"):
+            return False
+        if not sys.stdin.isatty():
+            return False
+        ready, _, _ = select.select([sys.stdin], [], [], 0)
+        if not ready:
+            return False
+        line = sys.stdin.readline().strip().lower()
+        return line in ("q", "quit", "exit")
+    except Exception:
+        return False
+
+gui_enabled = init_gui_window()
+if not gui_enabled:
+    logging.info("Mode CLI aktif. Ketik 'q' lalu Enter untuk keluar.")
+
 while running:
     status, frame = stream.read()
     # Connection state change notifications
@@ -373,16 +409,32 @@ while running:
     prev_status = status
     if not status or frame is None:
         frame_display = blank_frame.copy()
-        cv2.putText(frame_display, "Menghubungkan / Stream Offline...", (30, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-        cv2.imshow("CCTV Stream - Human Detection", frame_display)
+        if gui_enabled:
+            cv2.putText(frame_display, "Menghubungkan / Stream Offline...", (30, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+            try:
+                cv2.imshow("CCTV Stream - Human Detection", frame_display)
+            except Exception as exc:
+                logging.warning(f"GUI OpenCV gagal saat render offline: {exc}. Beralih ke mode CLI.")
+                gui_enabled = False
+                cv2.destroyAllWindows()
         
         if (time.time() - last_reconnect_log) > 3:
             logging.warning("Tidak dapat membaca frame dari stream SRT. Menunggu koneksi...")
             last_reconnect_log = time.time()
-            
-        if cv2.waitKey(30) & 0xFF == ord('q'):
-            running = False
-            break
+
+        if gui_enabled:
+            try:
+                if cv2.waitKey(30) & 0xFF == ord('q'):
+                    running = False
+                    break
+            except Exception as exc:
+                logging.warning(f"GUI OpenCV gagal saat waitKey: {exc}. Beralih ke mode CLI.")
+                gui_enabled = False
+                cv2.destroyAllWindows()
+        else:
+            if cli_quit_requested():
+                running = False
+                break
             
         time.sleep(0.1)
         continue
@@ -436,12 +488,24 @@ while running:
             cv2.rectangle(frame_display, (x, y), (x + bw, y + bh), (0, 0, 255), 2)
             cv2.putText(frame_display, f"Human {conf:.2f}", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
             
-    cv2.imshow("CCTV Stream - Human Detection", frame_display)
-    
-    # Render GUI OpenCV, refresh key per 30ms (~30 FPS max rendering)
-    if cv2.waitKey(30) & 0xFF == ord('q'):
-        running = False
-        break
+    if gui_enabled:
+        try:
+            cv2.imshow("CCTV Stream - Human Detection", frame_display)
+            # Render GUI OpenCV, refresh key per 30ms (~30 FPS max rendering)
+            if cv2.waitKey(30) & 0xFF == ord('q'):
+                running = False
+                break
+        except Exception as exc:
+            logging.warning(f"GUI OpenCV gagal saat render: {exc}. Beralih ke mode CLI.")
+            gui_enabled = False
+            cv2.destroyAllWindows()
+    else:
+        if (time.time() - cli_last_log) > 5:
+            logging.info("Mode CLI aktif. Stream berjalan...")
+            cli_last_log = time.time()
+        if cli_quit_requested():
+            running = False
+            break
 
 # Graceful shutdown: send notification, stop stream, close windows
 try:

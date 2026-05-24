@@ -81,6 +81,8 @@ If you use a different virtual environment path, activate it first before runnin
 
 Press `q` in the GUI window to exit cleanly.
 
+If the GUI cannot start (for example, on a headless server), the app will auto-switch to CLI mode. You can also force CLI mode by setting `CLI_MODE=true` in `.env`, then type `q` and press Enter to exit.
+
 ## Notes
 
 - Model weights are intentionally kept out of git.
