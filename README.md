@@ -83,6 +83,8 @@ Press `q` in the GUI window to exit cleanly.
 
 If the GUI cannot start (for example, on a headless server), the app will auto-switch to CLI mode. You can also force CLI mode by setting `CLI_MODE=true` in `.env`, then type `q` and press Enter to exit.
 
+If the server can read SRT with `ffmpeg` but the app logs repeated "Tidak dapat membaca frame", try setting `FFMPEG_PIPE_FORMAT=raw` (disables MJPEG encoder dependency) and `FFMPEG_LOG_STDERR=true` to surface ffmpeg errors.
+
 ## Notes
 
 - Model weights are intentionally kept out of git.

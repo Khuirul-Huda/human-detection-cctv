@@ -50,6 +50,8 @@ SRT_LATENCY_MS = int(os.getenv('SRT_LATENCY_MS', '200'))
 SRT_RCV_LATENCY_MS = int(os.getenv('SRT_RCV_LATENCY_MS', str(SRT_LATENCY_MS)))
 SRT_PEER_LATENCY_MS = int(os.getenv('SRT_PEER_LATENCY_MS', str(SRT_LATENCY_MS)))
 CLI_MODE = str(os.getenv('CLI_MODE', 'false')).lower() in ('1', 'true', 'yes')
+FFMPEG_PIPE_FORMAT = str(os.getenv('FFMPEG_PIPE_FORMAT', 'mjpeg')).lower()
+FFMPEG_LOG_STDERR = str(os.getenv('FFMPEG_LOG_STDERR', 'false')).lower() in ('1', 'true', 'yes')
 
 # Telegram config
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN', '')
@@ -84,11 +86,13 @@ class SRTFFmpegReader:
         self.ff_threads = int(ff_threads)
         self.jpeg_quality = int(jpeg_quality)
         self.use_hwaccel = use_hwaccel
+        self.pipe_format = FFMPEG_PIPE_FORMAT if FFMPEG_PIPE_FORMAT in ("mjpeg", "raw") else "mjpeg"
         self.frame_size = self.width * self.height * 3
         self.proc = None
         self.frame = None
         self.status = False
         self._stop = False
+        self._stderr_thread = None
         self.read_timeout = max(1.0, float(STREAM_READ_TIMEOUT))
         self.reconnect_delay = max(0.1, float(STREAM_RECONNECT_DELAY))
         self.thread = threading.Thread(target=self._reader_thread, args=())
@@ -103,18 +107,43 @@ class SRTFFmpegReader:
             hwaccel_flags = "-hwaccel vaapi -hwaccel_device /dev/dri/renderD128 "
         input_url = self._build_stream_url()
         
+        if self.pipe_format == "raw":
+            output_flags = (
+                f'-an -map 0:v:0 -vf scale={self.width}:{self.height},fps={self.fps} '
+                f'-pix_fmt bgr24 -fps_mode passthrough -f rawvideo pipe:1'
+            )
+        else:
+            output_flags = (
+                f'-an -map 0:v:0 -vf scale={self.width}:{self.height},fps={self.fps} '
+                f'-fps_mode passthrough -f image2pipe -vcodec mjpeg -q:v {self.jpeg_quality} pipe:1'
+            )
+
         cmd = (
             f'ffmpeg -hide_banner -loglevel error -probesize 10000000 -analyzeduration 2000000 '
             f'-fflags +genpts+discardcorrupt -err_detect ignore_err -rw_timeout 5000000 '
-            f'{hwaccel_flags}-thread_queue_size 1024 -threads {self.ff_threads} -i "{input_url}" '
-            f'-vf scale={self.width}:{self.height},fps={self.fps} -f image2pipe -vcodec mjpeg -q:v {self.jpeg_quality} pipe:1'
+            f'-use_wallclock_as_timestamps 1 {hwaccel_flags}-thread_queue_size 1024 -threads {self.ff_threads} '
+            f'-i "{input_url}" {output_flags}'
         )
         args = shlex.split(cmd)
         try:
-            self.proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
+            stderr_target = subprocess.PIPE if FFMPEG_LOG_STDERR else subprocess.DEVNULL
+            self.proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=stderr_target, bufsize=0)
+            if FFMPEG_LOG_STDERR and self.proc.stderr is not None:
+                self._stderr_thread = threading.Thread(target=self._log_stderr, args=())
+                self._stderr_thread.daemon = True
+                self._stderr_thread.start()
         except Exception as e:
             logging.warning(f"Gagal menjalankan ffmpeg: {e}")
             self.proc = None
+
+    def _log_stderr(self):
+        try:
+            for raw in iter(self.proc.stderr.readline, b''):
+                line = raw.decode(errors="ignore").strip()
+                if line:
+                    logging.warning(f"ffmpeg: {line}")
+        except Exception:
+            pass
 
     def _reset_process(self):
         self.status = False
@@ -156,6 +185,20 @@ class SRTFFmpegReader:
                     if self.proc.poll() is not None or (time.time() - last_data_time) > self.read_timeout:
                         self._reset_process()
                         time.sleep(self.reconnect_delay)
+                    continue
+
+                if self.pipe_format == "raw":
+                    chunk = self.proc.stdout.read(self.frame_size)
+                    if not chunk or len(chunk) < self.frame_size:
+                        self._reset_process()
+                        time.sleep(self.reconnect_delay)
+                        continue
+
+                    last_data_time = time.time()
+                    frame = np.frombuffer(chunk, dtype=np.uint8)
+                    frame = frame.reshape((self.height, self.width, 3))
+                    self.frame = frame
+                    self.status = True
                     continue
 
                 chunk = self.proc.stdout.read(8192)
