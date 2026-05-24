@@ -31,6 +31,16 @@ source cctv_env/bin/activate
 pip install -r requirements.txt
 ```
 
+### Lightweight install (2GB RAM friendly)
+
+If your machine is low on RAM and cannot install CUDA, Torch, or Ultralytics, use the minimal requirements:
+
+```bash
+pip install -r requirements-lite.txt
+```
+
+In this mode you must provide the ONNX model yourself (place it in `models/yolov8n.onnx`). The helper script requires Ultralytics and will not run in lightweight mode.
+
 4. Edit `.env` and set your values:
 
 - `STREAM_URL` - your SRT input URL
