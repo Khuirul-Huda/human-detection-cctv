@@ -17,6 +17,7 @@ venv/
 env/
 cctv_env/
 .env
+PLAN.md
 *.log
 
 # IDE / editor files
