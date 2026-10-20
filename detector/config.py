@@ -16,6 +16,8 @@ class CameraConfig:
     url: str
     transport: str = "tcp"
     enabled: bool = True
+    width: Optional[int] = None
+    height: Optional[int] = None
 
 
 @dataclass
@@ -98,12 +100,39 @@ def load_config(env_path: Optional[str] = None) -> AppConfig:
         name = os.getenv(f"{prefix}NAME", f"kamera{i}")
         url = os.getenv(f"{prefix}URL", "")
         transport = os.getenv(f"{prefix}TRANSPORT", "tcp")
+
+        # Resolve native sub-stream resolution
+        w_env = os.getenv(f"{prefix}WIDTH")
+        h_env = os.getenv(f"{prefix}HEIGHT")
+        default_w = 480 if name == "kamera1" else 640
+        default_h = 544 if name == "kamera1" else 360
+        cam_width = int(w_env) if w_env else default_w
+        cam_height = int(h_env) if h_env else default_h
+
         if enabled and url:
-            cameras.append(CameraConfig(name=name, url=url, transport=transport, enabled=True))
+            cameras.append(
+                CameraConfig(
+                    name=name,
+                    url=url,
+                    transport=transport,
+                    enabled=True,
+                    width=cam_width,
+                    height=cam_height,
+                )
+            )
 
     # Backward compatibility fallback
     if not cameras and os.getenv("STREAM_URL"):
-        cameras.append(CameraConfig("kamera1", os.getenv("STREAM_URL", ""), "tcp", True))
+        cameras.append(
+            CameraConfig(
+                name="kamera1",
+                url=os.getenv("STREAM_URL", ""),
+                transport="tcp",
+                enabled=True,
+                width=480,
+                height=544,
+            )
+        )
 
     model_path = os.getenv("MODEL_PATH", "models/yolov8n.onnx")
     if not os.path.isabs(model_path) and not os.path.exists(model_path):

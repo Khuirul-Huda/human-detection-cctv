@@ -25,7 +25,7 @@ class RTSPFFmpegStream:
         height: int = 320,
         fps: int = 1,
         threads: int = 1,
-        read_timeout: float = 6.0,
+        read_timeout: float = 10.0,
     ):
         self.name = name
         self.url = url

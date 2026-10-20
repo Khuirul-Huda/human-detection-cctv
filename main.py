@@ -40,17 +40,19 @@ def run_snapshot_test(cameras: List[CameraConfig], config: AppConfig) -> None:
     logger.info("Running snapshot test mode...")
     for c in cameras:
         out_file = f"/tmp/snapshot_{c.name}.jpg"
+        w = c.width or config.stream_width
+        h = c.height or config.stream_height
         cmd = [
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
             "-rtsp_transport", c.transport,
             "-i", c.url,
-            "-vf", f"scale={config.stream_width}:{config.stream_height}:flags=fast_bilinear",
+            "-vf", f"scale={w}:{h}:flags=fast_bilinear",
             "-vframes", "1",
             out_file,
         ]
         rc = subprocess.call(cmd)
         if rc == 0 and os.path.exists(out_file):
-            logger.info(f"[{c.name}] Snapshot success -> {out_file} ({os.path.getsize(out_file)} bytes)")
+            logger.info(f"[{c.name}] Snapshot success ({w}x{h}) -> {out_file} ({os.path.getsize(out_file)} bytes)")
         else:
             logger.error(f"[{c.name}] Snapshot failed!")
 
@@ -64,18 +66,20 @@ def run_telegram_test(cameras: List[CameraConfig], config: AppConfig, notifier: 
 
     c = cameras[0]
     out_file = f"/tmp/snapshot_{c.name}.jpg"
+    w = c.width or config.stream_width
+    h = c.height or config.stream_height
     cmd = [
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
         "-rtsp_transport", c.transport,
         "-i", c.url,
-        "-vf", f"scale={config.stream_width}:{config.stream_height}:flags=fast_bilinear",
+        "-vf", f"scale={w}:{h}:flags=fast_bilinear",
         "-vframes", "1",
         out_file,
     ]
     subprocess.call(cmd)
 
     test_frame = cv2.imread(out_file) if os.path.exists(out_file) else np.zeros(
-        (config.stream_height, config.stream_width, 3), dtype=np.uint8
+        (h, w, 3), dtype=np.uint8
     )
     fake_boxes = [([50, 50, 100, 150], 0.95)]
     notifier.send_alert(c.name, 0.95, test_frame, fake_boxes)

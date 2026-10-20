@@ -37,12 +37,15 @@ class CameraWorker:
         self.audio_alerter = audio_alerter
         self.enable_ai = enable_ai
 
+        stream_w = config.width if config.width else app_config.stream_width
+        stream_h = config.height if config.height else app_config.stream_height
+
         self.stream = RTSPFFmpegStream(
             name=config.name,
             url=config.url,
             transport=config.transport,
-            width=app_config.stream_width,
-            height=app_config.stream_height,
+            width=stream_w,
+            height=stream_h,
             fps=app_config.stream_fps,
             threads=app_config.ff_threads,
         )
