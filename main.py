@@ -22,6 +22,7 @@ from detector import (
     CameraWorker,
     SharedYOLODetector,
     TelegramNotifier,
+    AudioAlerter,
     load_config,
 )
 
@@ -88,10 +89,23 @@ def main() -> None:
     parser.add_argument("--camera", type=str, choices=["kamera1", "kamera2", "all"], default="all", help="Camera filter")
     parser.add_argument("--test-snapshot", action="store_true", help="Capture 1 snapshot from each camera and exit")
     parser.add_argument("--test-telegram", action="store_true", help="Send a test notification to Telegram and exit")
+    parser.add_argument("--test-sound", action="store_true", help="Play test chime sound and exit")
     parser.add_argument("--duration", type=int, default=0, help="Run for N seconds then exit (0 = run indefinitely)")
     args = parser.parse_args()
 
     config = load_config()
+
+    # Diagnostic test modes
+    if args.test_sound:
+        logger.info(f"Playing test audio chime from: {config.audio_alert_file}...")
+        alerter = AudioAlerter(
+            sound_file=config.audio_alert_file,
+            cooldown_seconds=0,
+            enabled=True,
+        )
+        alerter.play()
+        time.sleep(1.0)
+        return
 
     if not config.cameras:
         logger.error("No cameras configured in .env! Please define CAM1_* or CAM2_*.")
@@ -134,6 +148,16 @@ def main() -> None:
     else:
         logger.warning("Telegram alerting inactive (token or chat_id empty).")
 
+    audio_alerter = AudioAlerter(
+        sound_file=config.audio_alert_file,
+        cooldown_seconds=config.audio_cooldown_seconds,
+        enabled=config.enable_audio_alert,
+    )
+    if audio_alerter.enabled:
+        logger.info(f"Audio alert active using chime: {os.path.basename(config.audio_alert_file)} (cooldown {config.audio_cooldown_seconds}s)")
+    else:
+        logger.info("Audio alert is disabled in configuration.")
+
     # Start workers for each selected camera
     workers = []
     for c in selected_cameras:
@@ -142,6 +166,7 @@ def main() -> None:
             app_config=config,
             detector=detector,
             notifier=notifier,
+            audio_alerter=audio_alerter,
             enable_ai=(not args.no_ai),
         )
         workers.append(w)

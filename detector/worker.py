@@ -13,6 +13,7 @@ from .stream import RTSPFFmpegStream
 from .motion import MotionGate
 from .inference import SharedYOLODetector
 from .notifier import TelegramNotifier
+from .audio import AudioAlerter
 
 logger = logging.getLogger("CCTV-Detector.Worker")
 
@@ -26,12 +27,14 @@ class CameraWorker:
         app_config: AppConfig,
         detector: Optional[SharedYOLODetector],
         notifier: TelegramNotifier,
+        audio_alerter: Optional[AudioAlerter] = None,
         enable_ai: bool = True,
     ):
         self.config = config
         self.app_config = app_config
         self.detector = detector
         self.notifier = notifier
+        self.audio_alerter = audio_alerter
         self.enable_ai = enable_ai
 
         self.stream = RTSPFFmpegStream(
@@ -109,5 +112,7 @@ class CameraWorker:
                             f"[{self.config.name}] HUMAN CONFIRMED! (conf={highest_conf:.2f}, count={len(boxes)})"
                         )
                         self.notifier.send_alert(self.config.name, highest_conf, frame, boxes)
+                        if self.audio_alerter:
+                            self.audio_alerter.play()
                     else:
                         logger.info(f"[{self.config.name}] AI Checked: Motion is not a human (filtered).")

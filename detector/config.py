@@ -44,6 +44,11 @@ class AppConfig:
     telegram_chat_id: str = ""
     alert_cooldown_seconds: int = 60
 
+    # Audio Alert settings
+    enable_audio_alert: bool = True
+    audio_alert_file: str = "assets/ding.wav"
+    audio_cooldown_seconds: int = 15
+
     # Camera list
     cameras: List[CameraConfig] = field(default_factory=list)
 
@@ -107,6 +112,15 @@ def load_config(env_path: Optional[str] = None) -> AppConfig:
         if os.path.exists(candidate):
             model_path = candidate
 
+    audio_file = os.getenv("AUDIO_ALERT_FILE", "assets/ding.wav")
+    if not os.path.isabs(audio_file) and not os.path.exists(audio_file):
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        candidate_audio = os.path.join(project_root, audio_file)
+        if os.path.exists(candidate_audio):
+            audio_file = candidate_audio
+
+    enable_audio = str(os.getenv("ENABLE_AUDIO_ALERT", "true")).lower() in ("1", "true", "yes")
+
     return AppConfig(
         stream_fps=int(os.getenv("STREAM_FPS", "1")),
         stream_width=int(os.getenv("STREAM_WIDTH", "320")),
@@ -124,5 +138,8 @@ def load_config(env_path: Optional[str] = None) -> AppConfig:
         telegram_token=os.getenv("TELEGRAM_TOKEN", ""),
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
         alert_cooldown_seconds=int(os.getenv("ALERT_COOLDOWN_SECONDS", "60")),
+        enable_audio_alert=enable_audio,
+        audio_alert_file=audio_file,
+        audio_cooldown_seconds=int(os.getenv("AUDIO_COOLDOWN_SECONDS", "15")),
         cameras=cameras,
     )

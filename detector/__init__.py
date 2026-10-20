@@ -8,6 +8,7 @@ from .stream import RTSPFFmpegStream
 from .motion import MotionGate
 from .inference import SharedYOLODetector
 from .notifier import TelegramNotifier
+from .audio import AudioAlerter
 from .worker import CameraWorker
 
 __all__ = [
@@ -18,5 +19,6 @@ __all__ = [
     "MotionGate",
     "SharedYOLODetector",
     "TelegramNotifier",
+    "AudioAlerter",
     "CameraWorker",
 ]
